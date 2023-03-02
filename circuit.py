@@ -6,9 +6,11 @@
 # existing ones didn't work with CircuitPython.  
 # @author: Jesse R. Castro
 # @TODO: Create a separate class for animations
+# @TODO: Create a demo for custom fonts
 
 import random
 import time
+from math import floor
 
 import board
 import busio
@@ -16,15 +18,18 @@ import displayio
 import gc9a01
 import terminalio
 import analogio
+import vectorio
 
 from adafruit_display_text import label
 from adafruit_bitmap_font import bitmap_font
 
 # Note: this is important during dev or else you can't use the screen
 # for the actual app, it tries to default to debugging.
-displayio.release_displays()
+# displayio.release_displays()
 
-# A generic class to describe battery status
+# A generic class to describe battery status, should 
+# work with any battery that has a voltage between 3.2V
+# and 4.3V
 class Battery(object):
     # Initialize the battery
     # returns: nothing
@@ -256,22 +261,51 @@ class GC9A01_Display(object):
 
         self.group = displayio.Group()
 
+    # Draw a polygon on the display
+    # points: a list of points, each point is a Tuple of 2 integers
+    # x: the x coordinate of the 0,0 origin of the polygon
+    # y: the y coordinate of the 0,0 origin of the polygon
+    # color: the color of the polygon
+    # returns: the vectorio.Polygon object that was created
+    def draw_polygon(self,points,x,y,color):
+        palette = displayio.Palette(1)
+        palette[0] = color
+        polygon = vectorio.Polygon(pixel_shader=palette, points=points, x=x, y=y)
+        self.group.append(polygon)
+        if self.auto_show:
+            self.display.show(self.group)
+        return polygon
+
     # Draw a rectangle on the display
     # x: the x coordinate of the upper left corner of the rectangle
     # y: the y coordinate of the upper left corner of the rectangle
     # w: the width of the rectangle
     # h: the height of the rectangle
     # color: the color of the rectangle
-    # returns: the displayio.TileGrid object that was created
+    # returns: the vectorio.Rectangle object that was created
     def draw_rectangle(self,x,y,w,h,color):
-        bitmap = displayio.Bitmap(w, h, 1)
         palette = displayio.Palette(1)
         palette[0] = color
-        tile_grid = displayio.TileGrid(bitmap, pixel_shader=palette, x=x, y=y)
-        self.group.append(tile_grid)
+        rectangle = vectorio.Rectangle(pixel_shader=palette, width=w, height=h, x=x, y=y)
+        self.group.append(rectangle)
         if self.auto_show:
             self.display.show(self.group)
-        return tile_grid
+        return rectangle
+    
+    # Draw a circle on the display
+    # x: the x coordinate of the center of the circle
+    # y: the y coordinate of the center of the circle
+    # r: the radius of the circle
+    # color: the color of the circle
+    # returns: the vectorio.Circle object that was created
+    def draw_circle(self,x,y,r,color):
+        palette = displayio.Palette(1)
+        palette[0] = color
+        circle = vectorio.Circle(pixel_shader=palette, radius=r, x=x, y=y)
+        self.group.append(circle)
+        if self.auto_show:
+            self.display.show(self.group)
+        return circle
     
     # Draw text on the display
     # x: the x coordinate of the upper left corner of the text
@@ -336,41 +370,71 @@ class GC9A01_Display(object):
 # well as the pins used to communicate with the accelerometer.
 # It also has helper functions to make it easier to draw to the
 # display.
-class wsRP2040128():
+class wsRP2040128(object):
     # Initialize the board
     # returns: nothing
-    def __init__(self):
+    def __init__(self,initAccel=True, initBattery=True, initDisplay=True):
+        # What we're actually gonna use
+        self._use_display = initDisplay
+        self._use_accel = initAccel
+        self._use_battery = initBattery
+
         # Important - release the display from dev stuff
-        displayio.release_displays()
+        if(self._use_display):
+            displayio.release_displays()
+        
         # Initialize hardware
-        self._display = GC9A01_Display(True)
-        self._qmi8658 =QMI8658_Accelerometer()
-        # This is where we'll track our sprites
-        self.sprites = {}
-        # The accelerometer revision
-        self.qmi8658rev = self._qmi8658.rev
-        # Accelerometer data
-        self.accel = {
-            'x': 0.0,
-            'y': 0.0,
-            'z': 0.0
-        }
-        # Gyroscope data
-        self.gyro = {
-            'x': 0.0,
-            'y': 0.0,
-            'z': 0.0
-        }
-        # Battery data
-        self._battery = Battery()
-        self.battery_voltage = 0.0
-        self.battery_percent = 0.0
-        self.battery_charging = False
-        self.battery_status = 'init'
+        if(self._use_display):
+            self._display = GC9A01_Display(True)
+            # This is where we'll track our sprites
+            self.sprites = {}
+        if(self._use_accel):
+            self._qmi8658 =QMI8658_Accelerometer()
+            # The accelerometer revision
+            self.qmi8658rev = self._qmi8658.rev
+            # Accelerometer data
+            self.accel = {
+                'x': 0.0,
+                'y': 0.0,
+                'z': 0.0
+            }
+            # Gyroscope data
+            self.gyro = {
+                'x': 0.0,
+                'y': 0.0,
+                'z': 0.0
+            }
+        if(self._use_battery):
+            self._battery = Battery()
+            # Battery data
+            self.battery_voltage = 0.0
+            self.battery_percent = 0.0
+            self.battery_charging = False
+            self.battery_status = 'init'
 
         # Time tracker
         self.time = time.monotonic()
-        
+
+    # Passthrough method to draw a polygon on the display
+    # sprite_id: text identifier for the sprite
+    # points: a list of points that make up the polygon
+    # x: the x coordinate of the 0,0 origin of the polygon
+    # y: the y coordinate of the 0,0 origin of the polygon
+    # color: the color of the polygon
+    # returns: nothing
+    def draw_polygon(self,sprite_id,points,x,y,color):
+        self.sprites[sprite_id] = self._display.draw_polygon(points,x,y,color)
+
+    # Passthrough method to draw a circle on the display
+    # sprite_id: text identifier for the sprite
+    # x: the x coordinate of the center of the circle
+    # y: the y coordinate of the center of the circle
+    # r: the radius of the circle
+    # color: the color of the circle
+    # returns: nothing
+    def draw_circle(self,sprite_id,x,y,r,color):
+        self.sprites[sprite_id] = self._display.draw_circle(x,y,r,color)
+
     # Passthrough method to draw a rectangle on the display
     # sprite_id: text identifier for the sprite
     # x: the x coordinate of the upper left corner of the rectangle
@@ -455,11 +519,15 @@ class wsRP2040128():
     # returns: nothing
     def _update_accelerometer(self):
         xyz = self._qmi8658.read_xyz()
-        self.accel['x'] = xyz[0]
-        self.accel['y'] = xyz[1]
+        # note: the accelerometer is mounted 270 degrees
+        #       from the original orientation of the board
+        #       so we need to swap the x and y values
+        #       and invert the y value
+        self.accel['x'] = xyz[1]
+        self.accel['y'] = xyz[0] * -1
         self.accel['z'] = xyz[2]
-        self.gyro['x'] = xyz[3]
-        self.gyro['y'] = xyz[4]
+        self.gyro['x'] = xyz[4]
+        self.gyro['y'] = xyz[3]
         self.gyro['z'] = xyz[5]          
 
     # Update the battery data 
@@ -476,69 +544,182 @@ class wsRP2040128():
     # Update the hardware on the board for this pass
     # returns: nothing
     def update(self):
-        self._update_accelerometer()
-        self._show()
-        self._update_battery()
-
-    # Demo code - run in the main loop
+        if(self._use_accel):
+            self._update_accelerometer()
+        if(self._use_battery):
+            self._update_battery()
+        if(self._use_display):
+            self._show()
+        
+    # Demo code - run in the main loop, works if
+    # you turn off hardware still.
     # counter: the current animation iteration
     # sleep_time: the time to sleep between updates
     # returns: nothing
-    def demo(self, counter, sleep_time=0.01):
-        try:
-            # Update the sensor info
-            self.sprites['volt_text'].text = "Vol: {:.2f}v".format(self.battery_voltage)
-            self.sprites['charge_text'].text = "Chg: {}".format(self.battery_status)
-            self.sprites['accel_x'].text = "X: {:.2f}".format(self.accel['x'])
-            self.sprites['accel_y'].text = "Y: {:.2f}".format(self.accel['y'])
-            self.sprites['accel_z'].text = "Z: {:.2f}".format(self.accel['z'])
-            self.sprites['gyro_x'].text = "X: {:3.2f}".format(self.gyro['x'])
-            self.sprites['gyro_y'].text = "Y: {:3.2f}".format(self.gyro['y'])
-            self.sprites['gyro_z'].text = "Z: {:3.2f}".format(self.gyro['z'])
+    def demo(self, counter, sleep_time=0.1):
+        if(self._use_display):
+            try:
+                # Update the sensor info
+                if(self._use_battery):
+                    self.sprites['volt_text'].text = "Vol: {:.2f}v".format(self.battery_voltage)
+                    self.sprites['charge_text'].text = "Chg: {}".format(self.battery_status)
+                if(self._use_accel):    
+                    self.sprites['accel_x'].text = "X: {:.2f}".format(self.accel['x'])
+                    self.sprites['accel_y'].text = "Y: {:.2f}".format(self.accel['y'])
+                    self.sprites['accel_z'].text = "Z: {:.2f}".format(self.accel['z'])
+                    self.sprites['gyro_x'].text = "X: {:3.2f}".format(self.gyro['x'])
+                    self.sprites['gyro_y'].text = "Y: {:3.2f}".format(self.gyro['y'])
+                    self.sprites['gyro_z'].text = "Z: {:3.2f}".format(self.gyro['z'])
 
-            # Title Animation
-            if(self.sprites['title_text'].x < -100):
-                self.sprites['title_text'].x = 200
-            else:
-                self.sprites['title_text'].x -= 2
+                # Title Animation
+                if(self.sprites['title_text'].x < -100):
+                    self.sprites['title_text'].x = 200
+                elif counter%2==0:
+                    self.sprites['title_text'].x -= 1
 
-            # Update sprite, spritecounter and display    
-            if(self.time + sleep_time) < time.monotonic():
-                self.sprites['coin_sprite'][0] = counter
-                self.update()
-                counter += 1
-                self.time = time.monotonic()
-                if counter >= 14:
-                    counter = 0           
 
-        except Exception as e:
-            # Fill the background with black
-            self.fill(self.color('black'))
-            # Draw the title bar
-            self.draw_rectangle("title",0,0,240,40,self.color('red'))
-            self.draw_text("title_text", 60, 25, "WS RP2040 1.28 Demo", self.color('white'), terminalio.FONT)
-            # Draw the status bar
-            self.draw_rectangle("battery",0,40,240,30,self.color('blue'))
-            self.draw_text("charge_text", 20, 55, "Chg: {}".format(self.battery_status), self.color('white'), terminalio.FONT)
-            self.draw_text("volt_text", 90, 55, "Vol: {:.2f}v".format(self.battery_voltage), self.color('white'), terminalio.FONT)
-            self.draw_text("rev_text", 160, 55, "ARev: {}".format(self.qmi8658rev), self.color('white'), terminalio.FONT)
-            # Draw the accelerometer data
-            self.draw_rectangle("accelerometer",0,70,120,60,self.color('green'))
-            self.draw_text("accelerometer_text", 20, 85, "Accel", self.color('black'), terminalio.FONT)
-            self.draw_text("accel_x", 20, 95, "X: 0.0", self.color('black'), terminalio.FONT)
-            self.draw_text("accel_y", 20, 105, "Y: 0.0", self.color('black'), terminalio.FONT)
-            self.draw_text("accel_z", 20, 115, "Z: 0.0", self.color('black'), terminalio.FONT)
-            # Draw the gyroscope data
-            self.draw_rectangle("gyroscope",120,70,120,60,self.color('orange'))
-            self.draw_text("gyroscope_text", 140, 85, "Gyro", self.color('black'), terminalio.FONT)
-            self.draw_text("gyro_x", 140, 95, "X: 0.0", self.color('black'), terminalio.FONT)
-            self.draw_text("gyro_y", 140, 105, "Y: 0.0", self.color('black'), terminalio.FONT)
-            self.draw_text("gyro_z", 140, 115, "Z: 0.0", self.color('black'), terminalio.FONT)
-            # Draw a bitmap sprite sheet and animate it
-            self.draw_sprite("coin_sprite", 88, 150, 'bmp/sprite_coin.bmp', 14, 1, 0)
+                # Update sprite, spritecounter and display    
+                if(self.time + sleep_time) < time.monotonic():
+                    self.sprites['coin_sprite'][0] = counter
+                    self.update()
+                    counter += 1
+                    self.time = time.monotonic()
+                    if counter >= 14:
+                        counter = 0           
+
+            except Exception as e:
+                # Fill the background with black
+                self.fill(self.color('black'))
+                # Draw the title bar
+                self.draw_rectangle("title",0,0,240,40,self.color('red'))
+                self.draw_text("title_text", 60, 25, "WS RP2040 1.28 Demo", self.color('white'), terminalio.FONT)
+                # Draw the status bar
+                if(self._use_battery):
+                    self.draw_rectangle("battery",0,40,240,30,self.color('blue'))
+                    self.draw_text("charge_text", 20, 55, "Chg: {}".format(self.battery_status), self.color('white'), terminalio.FONT)
+                    self.draw_text("volt_text", 90, 55, "Vol: {:.2f}v".format(self.battery_voltage), self.color('white'), terminalio.FONT)
+                if(self._use_accel):
+                    self.draw_text("rev_text", 160, 55, "ARev: {}".format(self.qmi8658rev), self.color('white'), terminalio.FONT)
+                # Draw all accel data
+                if(self._use_accel):
+                    # Draw the accelerometer data
+                    self.draw_rectangle("accelerometer",0,70,120,60,self.color('green'))
+                    self.draw_text("accelerometer_text", 20, 85, "Accel", self.color('black'), terminalio.FONT)
+                    self.draw_text("accel_x", 20, 95, "X: 0.0", self.color('black'), terminalio.FONT)
+                    self.draw_text("accel_y", 20, 105, "Y: 0.0", self.color('black'), terminalio.FONT)
+                    self.draw_text("accel_z", 20, 115, "Z: 0.0", self.color('black'), terminalio.FONT)
+                    # Draw the gyroscope data
+                    self.draw_rectangle("gyroscope",120,70,120,60,self.color('orange'))
+                    self.draw_text("gyroscope_text", 140, 85, "Gyro", self.color('black'), terminalio.FONT)
+                    self.draw_text("gyro_x", 140, 95, "X: 0.0", self.color('black'), terminalio.FONT)
+                    self.draw_text("gyro_y", 140, 105, "Y: 0.0", self.color('black'), terminalio.FONT)
+                    self.draw_text("gyro_z", 140, 115, "Z: 0.0", self.color('black'), terminalio.FONT)
+                # Draw a bitmap sprite sheet and animate it
+                self.draw_sprite("coin_sprite", 88, 150, 'bmp/sprite_coin.bmp', 14, 1, 0)
+                # Draw a cicle
+                self.draw_circle("circle", 40, 170, 20, self.color('magenta'))
+                # Draw a polygon
+                points = [
+                    (15,0),
+                    (11,10),
+                    (0,10),
+                    (8,20),
+                    (5,29),
+                    (15,21),
+                    (25,29),
+                    (22,20),
+                    (29,10),
+                    (19,10)
+                ]
+                self.draw_polygon("polygon", points, 160, 160, self.color('cyan'))
+        else:
+            print("Display not intialized")
         return counter
+
+    # Demo using drawing and accelerator.  We're creating
+    # a ball that reads the accelerometer and moves around
+    # the screen.  When it falls off the circular screen,
+    # the game is over and the ball is reset to the center.
+    # counter: the current animation iteration
+    # sleep_time: the time to sleep between updates
+    # returns: nothing
+    def ball_demo(self, ball, sleep_time=0.01):
+        max_accel = 5
+        min_accel = max_accel * -1
+
+        # Avoid overflow    
+        if ball.counter == 1023:
+            ball.counter = 0
+        else:
+            ball.counter = ball.counter + 1
+
+        # Check if the ball is drawn
+        if(not ball.drawn):
+            # Initializations
+            print("{}: Initializing ball_demo".format(ball.counter))
+            self.fill(self.color('black'))
+            self.draw_circle("ball", 120, 120, 10, self.color('white'))
+            ball.drawn = True
+
+        # Main game loop
+        #current accelerator values
+        curx = floor(self.accel['x'])
+        cury = floor(self.accel['y'])
+        #ramp the accelerator factor up or down
+        if curx < 0:
+            ball.xaccel = ball.xaccel - 1
+            if ball.xaccel < min_accel:
+                ball.xaccel = min_accel
+        else:
+            ball.xaccel = ball.xaccel + 1
+            if ball.xaccel > max_accel:
+                ball.xaccel = max_accel
+        print("xaccel: {}".format(ball.xaccel))       
+        if cury < 0:
+            ball.yaccel = ball.yaccel - 1
+            if ball.yaccel < min_accel:
+                ball.yaccel = min_accel
+        else:
+            ball.yaccel = ball.yaccel + 1
+            if ball.yaccel > max_accel:
+                ball.yaccel = max_accel
+
+        #new positions
+        ball.xpos = ball.xpos + ball.xaccel
+        ball.ypos = ball.ypos + ball.yaccel    
+    
+        # Update the sprites based on the accelerometer
+        self.sprites['ball'].x = ball.xpos
+        self.sprites['ball'].y = ball.ypos
+
+        # Check for collision with the walls
+        if (
+            ball.xpos < 0 
+            or ball.xpos > 240 
+            or ball.ypos < 0 
+            or ball.ypos > 240
+            ):
+            ball.xpos = 120
+            ball.ypos = 120
+            ball.xaccel = 0
+            ball.yaccel = 0
+        self.update()        
+        time.sleep(sleep_time)
+        
+        return ball
 
 hardware = wsRP2040128()
 counter = 0
+class Ball(object):
+    def __init__(self):
+        self.xpos = 120
+        self.ypos = 120
+        self.xaccel = 0
+        self.yaccel = 0
+        self.counter = 0
+        self.drawn = False
+ball = Ball()
 while True:
-    counter = hardware.demo(counter)
+    ## Uncomment the demo you want to run
+    #counter = hardware.demo(counter)
+    ball = hardware.ball_demo(ball, 0.05)
