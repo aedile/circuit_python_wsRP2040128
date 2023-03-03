@@ -5,8 +5,8 @@
 # I had to implement my own battery and IMU classes because the
 # existing ones didn't work with CircuitPython.  
 # @author: Jesse R. Castro
-# @TODO: Create a separate class for animations
-# @TODO: Create a demo for custom fonts
+# @TODO: Add menu class
+# @TODO: Record accelerometer data to a file for calibration
 
 import random
 import time
@@ -22,10 +22,6 @@ import vectorio
 
 from adafruit_display_text import label
 from adafruit_bitmap_font import bitmap_font
-
-# Note: this is important during dev or else you can't use the screen
-# for the actual app, it tries to default to debugging.
-# displayio.release_displays()
 
 # A generic class to describe battery status, should 
 # work with any battery that has a voltage between 3.2V
@@ -259,21 +255,31 @@ class GC9A01_Display(object):
         self.display_bus = displayio.FourWire(self.spi, command=self.dc, chip_select=self.cs, reset=self.rst)
         self.display = gc9a01.GC9A01(self.display_bus, width=self.width, height=self.height, backlight_pin=self.bl)
 
-        self.group = displayio.Group()
+        self.groups = {
+            'default': displayio.Group()
+        }
+
+    # Add a new group to the display
+    # groupname: the name of the group to add
+    # returns: nothing
+    def add_group(self, groupname):
+        self.groups[groupname] = displayio.Group()
 
     # Draw a polygon on the display
     # points: a list of points, each point is a Tuple of 2 integers
     # x: the x coordinate of the 0,0 origin of the polygon
     # y: the y coordinate of the 0,0 origin of the polygon
-    # color: the color of the polygon
+    # color: a list of colors for the palette
+    # groupname: the name of the group to add the polygon to
     # returns: the vectorio.Polygon object that was created
-    def draw_polygon(self,points,x,y,color):
-        palette = displayio.Palette(1)
-        palette[0] = color
+    def draw_polygon(self,points,x,y,color,groupname='default'):
+        palette = displayio.Palette(len(color))
+        for i in range(len(color)):
+            palette[i] = color[i]
         polygon = vectorio.Polygon(pixel_shader=palette, points=points, x=x, y=y)
-        self.group.append(polygon)
+        self.groups[groupname].append(polygon)
         if self.auto_show:
-            self.display.show(self.group)
+            self.display.show(self.groups[groupname])
         return polygon
 
     # Draw a rectangle on the display
@@ -281,46 +287,54 @@ class GC9A01_Display(object):
     # y: the y coordinate of the upper left corner of the rectangle
     # w: the width of the rectangle
     # h: the height of the rectangle
-    # color: the color of the rectangle
+    # color: a list of colors for the palette
+    # groupname: the name of the group to add the rectangle to
     # returns: the vectorio.Rectangle object that was created
-    def draw_rectangle(self,x,y,w,h,color):
-        palette = displayio.Palette(1)
-        palette[0] = color
+    def draw_rectangle(self,x,y,w,h,color,groupname='default'):
+        palette = displayio.Palette(len(color))
+        for i in range(len(color)):
+            palette[i] = color[i]
         rectangle = vectorio.Rectangle(pixel_shader=palette, width=w, height=h, x=x, y=y)
-        self.group.append(rectangle)
+        self.groups[groupname].append(rectangle)
         if self.auto_show:
-            self.display.show(self.group)
+            self.display.show(self.groups[groupname])
         return rectangle
     
     # Draw a circle on the display
     # x: the x coordinate of the center of the circle
     # y: the y coordinate of the center of the circle
     # r: the radius of the circle
-    # color: the color of the circle
+    # color: a list of colors for the palette
+    # groupname: the name of the group to add the circle to
     # returns: the vectorio.Circle object that was created
-    def draw_circle(self,x,y,r,color):
-        palette = displayio.Palette(1)
-        palette[0] = color
+    def draw_circle(self,x,y,r,color,groupname='default'):
+        palette = displayio.Palette(len(color))
+        for i in range(len(color)):
+            palette[i] = color[i]
         circle = vectorio.Circle(pixel_shader=palette, radius=r, x=x, y=y)
-        self.group.append(circle)
+        self.groups[groupname].append(circle)
         if self.auto_show:
-            self.display.show(self.group)
+            self.display.show(self.groups[groupname])
         return circle
     
     # Draw text on the display
     # x: the x coordinate of the upper left corner of the text
     # y: the y coordinate of the upper left corner of the text
     # text: the text to display
-    # color: the color of the text
+    # color: a list of colors for the pallette
     # font: the font to use
+    # groupname: the name of the group to add the text to
     # returns: the label.Label object that was created
-    def draw_text(self,x,y,text,color,font):
-        text_area = label.Label(font, text=text, color=color)
+    def draw_text(self,x,y,text,color,font,groupname='default'):
+        palette = displayio.Palette(len(color))
+        for i in range(len(color)):
+            palette[i] = color[i]
+        text_area = label.Label(font, text=text, color=palette[0])
         text_area.x = x
         text_area.y = y
-        self.group.append(text_area)
+        self.groups[groupname].append(text_area)
         if self.auto_show:
-            self.display.show(self.group)
+            self.display.show(self.groups[groupname])
         return text_area    
 
     # Draw a bitmap file on the display
@@ -328,9 +342,10 @@ class GC9A01_Display(object):
     # x: the x coordinate of the upper left corner of the bitmap
     # y: the y coordinate of the upper left corner of the bitmap
     # bitmap_path: the path to the bitmap file on the device
+    # groupname: the name of the group to add the bitmap to
     # returns: the displayio.TileGrid object that was created
-    def draw_bitmap(self,x,y,bitmap_path):
-        return self.draw_sprite(x,y,bitmap_path,1,1,0)
+    def draw_bitmap(self,x,y,bitmap_path,groupname='default'):
+        return self.draw_sprite(x,y,bitmap_path,1,1,0,groupname)
     
     # Draw an animated sprite on the display
     # NOTE: proceed with caution as memory is low on this device
@@ -342,19 +357,20 @@ class GC9A01_Display(object):
     # sprite_tile_width: the width of each tile in the sprite
     # sprite_tile_height: the height of each tile in the sprite
     # sprite_starting_tile: the starting tile in the sprite
-    #                    default is 0
-    def draw_sprite(self,x,y,sprite_path,sprite_tiles_x,sprite_tiles_y,sprite_starting_tile=0):
+    # groupname: the name of the group to add the sprite to
+    # returns: the displayio.TileGrid object that was created
+    def draw_sprite(self,x,y,sprite_path,sprite_tiles_x,sprite_tiles_y,sprite_starting_tile,groupname='default'):
         bitmap = displayio.OnDiskBitmap(sprite_path)
         sprite_tile_width = bitmap.width // sprite_tiles_x
         sprite_tile_height = bitmap.height // sprite_tiles_y
         tile_grid = displayio.TileGrid(bitmap, pixel_shader=bitmap.pixel_shader, width=1, height=1, tile_width=sprite_tile_width, tile_height=sprite_tile_height, default_tile=sprite_starting_tile, x=x, y=y)
-        self.group.append(tile_grid)
+        self.groups[groupname].append(tile_grid)
         if self.auto_show:
-            self.display.show(self.group)
+            self.display.show(self.groups[groupname])
         return tile_grid
 
     # Fill the display with a color
-    # color: the color to fill the display with
+    # color: a list of colors for the palette
     # returns: the displayio.TileGrid object that was created
     def fill(self,color):
         return self.draw_rectangle(0,0,self.width,self.height,color)
@@ -362,7 +378,9 @@ class GC9A01_Display(object):
     # Show the display
     # returns: nothing
     def show(self):
-        self.display.show(self.group)
+        for group in self.groups:
+            self.display.show(self.groups[group])
+            break
     
 # CircuitPython class representing the Waveshare RP2040 1.28" 
 # development board.  This class is used to initialize the
@@ -388,22 +406,59 @@ class wsRP2040128(object):
             self._display = GC9A01_Display(True)
             # This is where we'll track our sprites
             self.sprites = {}
+        
         if(self._use_accel):
             self._qmi8658 =QMI8658_Accelerometer()
             # The accelerometer revision
             self.qmi8658rev = self._qmi8658.rev
             # Accelerometer data
             self.accel = {
-                'x': 0.0,
-                'y': 0.0,
-                'z': 0.0
+                'x': 0,
+                'y': 0,
+                'z': 0,
+                
+            }
+            # This is a multiplier based on how long 
+            # the device has been in motion so you can
+            # ramp motion up instead of using linear.
+            self.momentum = {
+                'x': 0,
+                'y': 0,
+                'z': 0,
+                'max': 10
             }
             # Gyroscope data
             self.gyro = {
-                'x': 0.0,
-                'y': 0.0,
-                'z': 0.0
+                'x': 0,
+                'y': 0,
+                'z': 0
             }
+            # These are current tilt values.  Possible
+            # values are 'none', 'up' & 'down' for 'y', 
+            # 'none', 'left' & 'right' for 'twist'
+            # and 'none', 'left' & 'right' for 'x'
+            self.tilt = {
+                'x': 'none',
+                'y': 'none',
+                'twist': 'none'
+            }  
+            
+            # Value of the current active tilt state
+            # as well as when it was recorded. Possible values are
+            # 'tilt up', 'tilt down', 'twist left', 'twist right'
+            # and 'resting' for the state.  The time is the time
+            # in seconds since the device was powered on.
+            self.tilt_state = {'state': 'resting', 'time': time.monotonic()}
+            # This is a list of the previous three tilt states
+            # and when they occurred.  This is used to determine
+            # if the user is shaking the device.
+            self.tilt_history = [
+                {'state': 'resting', 'time': time.monotonic()},
+                {'state': 'resting', 'time': time.monotonic()},
+                {'state': 'resting', 'time': time.monotonic()}
+            ]
+            self.cur_tilt_command = 'none'
+
         if(self._use_battery):
             self._battery = Battery()
             # Battery data
@@ -421,9 +476,11 @@ class wsRP2040128(object):
     # x: the x coordinate of the 0,0 origin of the polygon
     # y: the y coordinate of the 0,0 origin of the polygon
     # color: the color of the polygon
+    # group: the index of the displayio.Group object to add 
+    #        the sprite to. Default is 'default'
     # returns: nothing
-    def draw_polygon(self,sprite_id,points,x,y,color):
-        self.sprites[sprite_id] = self._display.draw_polygon(points,x,y,color)
+    def draw_polygon(self,sprite_id,points,x,y,color,group='default'):
+        self.sprites[sprite_id] = self._display.draw_polygon(points,x,y,color,group)
 
     # Passthrough method to draw a circle on the display
     # sprite_id: text identifier for the sprite
@@ -431,9 +488,11 @@ class wsRP2040128(object):
     # y: the y coordinate of the center of the circle
     # r: the radius of the circle
     # color: the color of the circle
+    # group: the index of the displayio.Group object to add
+    #        the sprite to. Default is 'default'
     # returns: nothing
-    def draw_circle(self,sprite_id,x,y,r,color):
-        self.sprites[sprite_id] = self._display.draw_circle(x,y,r,color)
+    def draw_circle(self,sprite_id,x,y,r,color,group='default'):
+        self.sprites[sprite_id] = self._display.draw_circle(x,y,r,color,group)
 
     # Passthrough method to draw a rectangle on the display
     # sprite_id: text identifier for the sprite
@@ -442,9 +501,11 @@ class wsRP2040128(object):
     # w: the width of the rectangle
     # h: the height of the rectangle
     # color: the color of the rectangle
+    # group: the index of the displayio.Group object to add
+    #        the sprite to. Default is 'default'
     # returns: nothing    
-    def draw_rectangle(self,sprite_id,x,y,w,h,color):
-        self.sprites[sprite_id] = self._display.draw_rectangle(x,y,w,h,color)
+    def draw_rectangle(self,sprite_id,x,y,w,h,color,group='default'):
+        self.sprites[sprite_id] = self._display.draw_rectangle(x,y,w,h,color,group)
 
     # Passthrough method to draw text on the display
     # sprite_id: text identifier for the sprite
@@ -453,18 +514,22 @@ class wsRP2040128(object):
     # text: the text to display
     # color: the color of the text
     # font: the font to use
+    # group: the index of the displayio.Group object to add
+    #        the sprite to. Default is 'default'
     # returns: nothing
-    def draw_text(self,sprite_id, x,y,text,color,font):
-        self.sprites[sprite_id] = self._display.draw_text(x,y,text,color,font)
+    def draw_text(self,sprite_id, x,y,text,color,font,group='default'):
+        self.sprites[sprite_id] = self._display.draw_text(x,y,text,color,font,group)
     
     # Passthrough method to draw a bitmap file on the display
     # sprite_id: text identifier for the sprite
     # x: the x coordinate of the upper left corner of the bitmap
     # y: the y coordinate of the upper left corner of the bitmap
     # bitmap_path: the path to the bitmap file on the device
+    # group: the index of the displayio.Group object to add
+    #        the sprite to. Default is 'default'
     # returns: nothing
-    def draw_bitmap(self,sprite_id, x,y,bitmap_path):
-        self.sprites[sprite_id] = self._display.draw_bitmap(x,y,bitmap_path)
+    def draw_bitmap(self,sprite_id, x,y,bitmap_path,group='default'):
+        self.sprites[sprite_id] = self._display.draw_bitmap(x,y,bitmap_path,group)
 
     # Passthrough method to draw an animated sprite on the display
     # sprite_id: text identifier for the sprite
@@ -474,10 +539,11 @@ class wsRP2040128(object):
     # sprite_tiles_x: the number of tiles in the sprite in the x direction
     # sprite_tiles_y: the number of tiles in the sprite in the y direction
     # sprite_starting_tile: the starting tile in the sprite
-    #                    default is 0
+    # group: the index of the displayio.Group object to add
+    #        the sprite to. Default is 'default'
     # returns: nothing
-    def draw_sprite(self,sprite_id,x,y,sprite_path,sprite_tiles_x,sprite_tiles_y,sprite_starting_tile=0):
-        self.sprites[sprite_id] = self._display.draw_sprite(x,y,sprite_path,sprite_tiles_x,sprite_tiles_y,sprite_starting_tile)
+    def draw_sprite(self,sprite_id,x,y,sprite_path,sprite_tiles_x,sprite_tiles_y,sprite_starting_tile,group='default'):
+        self.sprites[sprite_id] = self._display.draw_sprite(x,y,sprite_path,sprite_tiles_x,sprite_tiles_y,sprite_starting_tile,group)
 
     # Passthrough method to fill the display with a color
     # color: the color to fill the display with
@@ -489,27 +555,82 @@ class wsRP2040128(object):
     # colstr: the color string
     # returns: the color value
     def color(self,colstr):
-        if colstr == 'red':
-            return 0xFF0000
-        elif colstr == 'green':
-            return 0x00FF00
-        elif colstr == 'blue':
-            return 0x0000FF
-        elif colstr == 'yellow':
-            return 0xFFFF00
-        elif colstr == 'cyan':
-            return 0x00FFFF
-        elif colstr == 'magenta':
-            return 0xFF00FF
-        elif colstr == 'white':
-            return 0xFFFFFF
-        elif colstr == 'black':
-            return 0x000000
-        elif colstr == 'orange':
-            return 0xFFA500
-        else:
-            return 0x000000
+        colors = {
+            'black': 0x000000,
+            'white': 0xFFFFFF,
+            'gray': 0x808080,
+            'lightgray': 0xC0C0C0,
+            'darkgray': 0x404040,
+            'red': 0xFF0000,
+            'green': 0x00FF00,
+            'blue': 0x0000FF,
+            'yellow': 0xFFFF00,
+            'cyan': 0x00FFFF,
+            'magenta': 0xFF00FF,
+            'orange': 0xFFA500,
+            'purple': 0x800080,
+            'brown': 0xA52A2A,
+            'pink': 0xFFC0CB,
+            'lime': 0x00FF00,
+            'teal': 0x008080,
+            'maroon': 0x800000,
+            'navy': 0x000080,
+            'olive': 0x808000,
+            'violet': 0xEE82EE,
+            'turquoise': 0x40E0D0,
+            'silver': 0xC0C0C0,
+            'gold': 0xFFD700,
+            'indigo': 0x4B0082,
+            'coral': 0xFF7F50,
+            'salmon': 0xFA8072,
+            'tan': 0xD2B48C,
+            'khaki': 0xF0E68C
+        }
+        try:
+            return [colors[colstr]]
+        except:
+            return [0x0000]
 
+    # Helper method to get incremental steps
+    # between two numbers.
+    # start: the starting number
+    # end: the ending number
+    # steps: the number of steps to take
+    # returns: a list of integers
+    def _steps(self,start,end,steps):
+        return [round(start + (end - start) * i / (steps - 1)) for i in range(steps)]        
+
+    # Helper method to convert a binary color value to 
+    # a list of three integers representing the red, green,
+    # and blue values.
+    # color: the binary color value
+    # returns: a list of three integers
+    def _color_to_rgb(self,color):
+        return [color[0] >> 16 & 0xFF, color[0] >> 8 & 0xFF, color[0] & 0xFF]
+    
+    # Helper method to convert a list of three integers
+    # representing the red, green, and blue values to a
+    # binary color value.
+    # rgb: a list of three integers
+    # returns: the binary color value
+    def _rgb_to_color(self,rgb):
+        return [rgb[0] << 16 | rgb[1] << 8 | rgb[2]]
+
+    # Helper method for color fades.  This method
+    # accepts two binary color values and the number
+    # of steps to take between the two colors.  It will
+    # return a list of colors that can be used to fade.
+    # start: the starting color
+    # end: the ending color
+    # returns: the color value
+    def fade(self,start,end,steps):
+        start_rgb = self._color_to_rgb(start)
+        end_rgb = self._color_to_rgb(end)
+        r_steps = self.steps(start_rgb[0],end_rgb[0],steps)
+        g_steps = self.steps(start_rgb[1],end_rgb[1],steps)
+        b_steps = self.steps(start_rgb[2],end_rgb[2],steps)
+        return [self._rgb_to_color([r_steps[i],g_steps[i],b_steps[i]]) for i in range(steps)]
+    
     # Show the display
     # returns: nothing
     def _show(self):
@@ -519,16 +640,111 @@ class wsRP2040128(object):
     # returns: nothing
     def _update_accelerometer(self):
         xyz = self._qmi8658.read_xyz()
-        # note: the accelerometer is mounted 270 degrees
-        #       from the original orientation of the board
-        #       so we need to swap the x and y values
-        #       and invert the y value
-        self.accel['x'] = xyz[1]
-        self.accel['y'] = xyz[0] * -1
-        self.accel['z'] = xyz[2]
-        self.gyro['x'] = xyz[4]
-        self.gyro['y'] = xyz[3]
-        self.gyro['z'] = xyz[5]          
+        accel = {}
+        gyro = {}
+        
+        accel['x'] = xyz[1]
+        accel['y'] = xyz[0]
+        accel['z'] = xyz[2]
+        gyro['x'] = xyz[4]
+        gyro['y'] = xyz[3]
+        gyro['z'] = xyz[5]       
+
+        # Note: my device seems to have some calibration
+        #       issues.  The values are not zeroed out
+        #       when the board is not moving.  I'm going
+        #       to try to compensate for this by subtracting
+        #       a calibration value.  Manual for now but 
+        #       I'll try to make this automatic in the future.
+        accel['x'] += 0.01
+        accel['y'] += 0.04
+        accel['z'] += 1.11
+        gyro['x'] -= 5.58
+        gyro['y'] += 45.55
+        gyro['z'] -= 0.20
+
+        # And now we'll convert everything to integers to make math 
+        # easier.  
+        accel['x'] = int(accel['x'] * 10)
+        accel['y'] = int(accel['y'] * -10)
+        accel['z'] = int(accel['z'] * 10)
+        gyro['x'] = int(gyro['x'])
+        gyro['y'] = int(gyro['y'])
+        gyro['z'] = int(gyro['z'])
+
+        # And now we'll update the momentum values
+        self.momentum['x'] += accel['x']
+        self.momentum['y'] += accel['y']
+        self.momentum['z'] += accel['z']
+        if(self.momentum['x'] > self.momentum['max']):
+            self.momentum['x'] = self.momentum['max']
+        if(self.momentum['x'] < self.momentum['max']*-1):
+            self.momentum['x'] = self.momentum['max']*-1
+        if(self.momentum['y'] > self.momentum['max']):
+            self.momentum['y'] = self.momentum['max']
+        if(self.momentum['y'] < self.momentum['max']*-1):
+            self.momentum['y'] = self.momentum['max']*-1
+        if(self.momentum['z'] > self.momentum['max']):
+            self.momentum['z'] = self.momentum['max']
+        if(self.momentum['z'] < self.momentum['max']*-1):
+            self.momentum['z'] = self.momentum['max']*-1
+
+        # Then we'll update tilt status
+        if(gyro['x'] > 0):
+            self.tilt['x'] = 'right'
+        elif(gyro['x'] < 0):
+            self.tilt['x'] = 'left'
+        else:
+            self.tilt['x'] = 'center'
+        if(gyro['y'] > 0):
+            self.tilt['y'] = 'up'
+        elif(gyro['y'] < 0):
+            self.tilt['y'] = 'down'
+        else:
+            self.tilt['y'] = 'center'
+        if(gyro['z'] > 0):
+            self.tilt['twist'] = 'left'
+        elif(gyro['z'] < 0):
+            self.tilt['twist'] = 'right'
+        else:
+            self.tilt['twist'] = 'center'
+        
+        # Now we need to update the tilt_state and
+        # tilt_history values based on which axis is 
+        # currently being tilted the strongest.
+        new_tilt_state = ''
+        if(abs(gyro['x']) > abs(gyro['y']) and abs(gyro['x']) > abs(gyro['z'])):
+            tilt_state = 'tilt ' + self.tilt['x']
+        elif(abs(gyro['y']) > abs(gyro['x']) and abs(gyro['y']) > abs(gyro['z'])):
+            tilt_state = 'tilt ' + self.tilt['y']
+        elif(abs(gyro['z']) > abs(gyro['x']) and abs(gyro['z']) > abs(gyro['y'])):
+            tilt_state = 'twist ' + self.tilt['twist']
+        else:
+            tilt_state = 'resting'
+        if(tilt_state != self.tilt_state):
+            self.tilt_state = tilt_state
+            self.tilt_history.append(tilt_state)
+            if(len(self.tilt_history) > 3):
+                self.tilt_history.pop(0)    
+        
+        # And finally we'll check for command status
+        if self.tilt_history[0] == 'tilt left' and self.tilt_history[1] == 'tilt right':
+            self.cur_tilt_command = 'tilt left'
+        elif self.tilt_history[0] == 'tilt right' and self.tilt_history[1] == 'tilt left':
+            self.cur_tilt_command = 'tilt right'
+        elif self.tilt_history[0] == 'tilt up' and self.tilt_history[1] == 'tilt down':
+            self.cur_tilt_command = 'tilt up'
+        elif self.tilt_history[0] == 'tilt down' and self.tilt_history[1] == 'tilt up':
+            self.cur_tilt_command = 'tilt down'
+        elif self.tilt_history[0] == 'twist left' and self.tilt_history[1] == 'twist right':
+            self.cur_tilt_command = 'twist left'
+        elif self.tilt_history[0] == 'twist right' and self.tilt_history[1] == 'twist left':
+            self.cur_tilt_command = 'twist right'
+        else:
+            self.cur_tilt_command = 'resting'
+
+        self.accel = accel
+        self.gyro = gyro
 
     # Update the battery data 
     # returns: nothing
@@ -550,7 +766,7 @@ class wsRP2040128(object):
             self._update_battery()
         if(self._use_display):
             self._show()
-        
+
     # Demo code - run in the main loop, works if
     # you turn off hardware still.
     # counter: the current animation iteration
@@ -564,12 +780,17 @@ class wsRP2040128(object):
                     self.sprites['volt_text'].text = "Vol: {:.2f}v".format(self.battery_voltage)
                     self.sprites['charge_text'].text = "Chg: {}".format(self.battery_status)
                 if(self._use_accel):    
-                    self.sprites['accel_x'].text = "X: {:.2f}".format(self.accel['x'])
-                    self.sprites['accel_y'].text = "Y: {:.2f}".format(self.accel['y'])
-                    self.sprites['accel_z'].text = "Z: {:.2f}".format(self.accel['z'])
-                    self.sprites['gyro_x'].text = "X: {:3.2f}".format(self.gyro['x'])
-                    self.sprites['gyro_y'].text = "Y: {:3.2f}".format(self.gyro['y'])
-                    self.sprites['gyro_z'].text = "Z: {:3.2f}".format(self.gyro['z'])
+                    self.sprites['accel_x'].text = "X: {}".format(self.accel['x'])
+                    self.sprites['accel_y'].text = "Y: {}".format(self.accel['y'])
+                    self.sprites['accel_z'].text = "Z: {}".format(self.accel['z'])
+                    self.sprites['gyro_x'].text = "X: {}".format(self.gyro['x'])
+                    self.sprites['gyro_y'].text = "Y: {}".format(self.gyro['y'])
+                    self.sprites['gyro_z'].text = "Z: {}".format(self.gyro['z'])
+                    self.sprites['mom_x'].text = "X: {}".format(self.momentum['x'])
+                    self.sprites['mom_y'].text = "Y: {}".format(self.momentum['y'])
+                    self.sprites['mom_z'].text = "Z: {}".format(self.momentum['z'])
+                    self.sprites['tilt_status'].text = "{}".format(self.tilt_state)
+                    self.sprites['tilt_command'].text = "{}".format(self.cur_tilt_command)
 
                 # Title Animation
                 if(self.sprites['title_text'].x < -100):
@@ -580,7 +801,6 @@ class wsRP2040128(object):
 
                 # Update sprite, spritecounter and display    
                 if(self.time + sleep_time) < time.monotonic():
-                    self.sprites['coin_sprite'][0] = counter
                     self.update()
                     counter += 1
                     self.time = time.monotonic()
@@ -588,6 +808,8 @@ class wsRP2040128(object):
                         counter = 0           
 
             except Exception as e:
+                print("We got an exception: {}".format(e))
+                print("Usually this just means that we haven't initialized the display elements yet.")
                 # Fill the background with black
                 self.fill(self.color('black'))
                 # Draw the title bar
@@ -603,21 +825,30 @@ class wsRP2040128(object):
                 # Draw all accel data
                 if(self._use_accel):
                     # Draw the accelerometer data
-                    self.draw_rectangle("accelerometer",0,70,120,60,self.color('green'))
+                    self.draw_rectangle("accelerometer",0,70,60,60,self.color('green'))
                     self.draw_text("accelerometer_text", 20, 85, "Accel", self.color('black'), terminalio.FONT)
-                    self.draw_text("accel_x", 20, 95, "X: 0.0", self.color('black'), terminalio.FONT)
-                    self.draw_text("accel_y", 20, 105, "Y: 0.0", self.color('black'), terminalio.FONT)
-                    self.draw_text("accel_z", 20, 115, "Z: 0.0", self.color('black'), terminalio.FONT)
+                    self.draw_text("accel_x", 20, 95, "X: 0", self.color('black'), terminalio.FONT)
+                    self.draw_text("accel_y", 20, 105, "Y: 0", self.color('black'), terminalio.FONT)
+                    self.draw_text("accel_z", 20, 115, "Z: 0", self.color('black'), terminalio.FONT)
                     # Draw the gyroscope data
-                    self.draw_rectangle("gyroscope",120,70,120,60,self.color('orange'))
-                    self.draw_text("gyroscope_text", 140, 85, "Gyro", self.color('black'), terminalio.FONT)
-                    self.draw_text("gyro_x", 140, 95, "X: 0.0", self.color('black'), terminalio.FONT)
-                    self.draw_text("gyro_y", 140, 105, "Y: 0.0", self.color('black'), terminalio.FONT)
-                    self.draw_text("gyro_z", 140, 115, "Z: 0.0", self.color('black'), terminalio.FONT)
-                # Draw a bitmap sprite sheet and animate it
-                self.draw_sprite("coin_sprite", 88, 150, 'bmp/sprite_coin.bmp', 14, 1, 0)
+                    self.draw_rectangle("gyroscope",60,70,60,60,self.color('orange'))
+                    self.draw_text("gyroscope_text", 80, 85, "Gyro", self.color('black'), terminalio.FONT)
+                    self.draw_text("gyro_x", 80, 95, "X: 0", self.color('black'), terminalio.FONT)
+                    self.draw_text("gyro_y", 80, 105, "Y: 0", self.color('black'), terminalio.FONT)
+                    self.draw_text("gyro_z", 80, 115, "Z: 0", self.color('black'), terminalio.FONT)
+                    # Draw the Tilt data
+                    self.draw_rectangle("momentum",120,70,60,60,self.color('magenta'))
+                    self.draw_text("momentum_text", 140, 85, "Tilt", self.color('black'), terminalio.FONT)
+                    self.draw_text("mom_x", 140, 95, "X: 0", self.color('black'), terminalio.FONT)
+                    self.draw_text("mom_y", 140, 105, "Y: 0", self.color('black'), terminalio.FONT)
+                    self.draw_text("mom_z", 140, 115, "Z: 0", self.color('black'), terminalio.FONT)
+                    # Draw current tilt status and command
+                    self.draw_rectangle("tilt_status",180,70,60,60,self.color('cyan'))
+                    self.draw_text("tilt_status_text", 200, 85, "Stat", self.color('black'), terminalio.FONT)
+                    self.draw_text("tilt_status", 200, 95, "resting", self.color('black'), terminalio.FONT)
+                    self.draw_text("tilt_command", 200, 105, "resting", self.color('black'), terminalio.FONT)
                 # Draw a cicle
-                self.draw_circle("circle", 40, 170, 20, self.color('magenta'))
+                self.draw_circle("circle", 40, 170, 20, self.color('yellow'))
                 # Draw a polygon
                 points = [
                     (15,0),
@@ -631,7 +862,7 @@ class wsRP2040128(object):
                     (29,10),
                     (19,10)
                 ]
-                self.draw_polygon("polygon", points, 160, 160, self.color('cyan'))
+                self.draw_polygon("polygon", points, 160, 160, self.color('brown'))
         else:
             print("Display not intialized")
         return counter
@@ -643,83 +874,51 @@ class wsRP2040128(object):
     # counter: the current animation iteration
     # sleep_time: the time to sleep between updates
     # returns: nothing
-    def ball_demo(self, ball, sleep_time=0.01):
+    def ball_demo(self, counter, sleep_time=0.01):
         max_accel = 5
-        min_accel = max_accel * -1
-
-        # Avoid overflow    
-        if ball.counter == 1023:
-            ball.counter = 0
-        else:
-            ball.counter = ball.counter + 1
-
         # Check if the ball is drawn
-        if(not ball.drawn):
+        if(counter == 0):
             # Initializations
-            print("{}: Initializing ball_demo".format(ball.counter))
+            print("{}: Initializing ball_demo".format(counter))
             self.fill(self.color('black'))
             self.draw_circle("ball", 120, 120, 10, self.color('white'))
-            ball.drawn = True
+        
+        # Avoid overflow    
+        if counter == 1024:
+            counter = 1
+        else:
+            counter = counter + 1
+
+            
 
         # Main game loop
-        #current accelerator values
-        curx = floor(self.accel['x'])
-        cury = floor(self.accel['y'])
-        #ramp the accelerator factor up or down
-        if curx < 0:
-            ball.xaccel = ball.xaccel - 1
-            if ball.xaccel < min_accel:
-                ball.xaccel = min_accel
-        else:
-            ball.xaccel = ball.xaccel + 1
-            if ball.xaccel > max_accel:
-                ball.xaccel = max_accel
-        print("xaccel: {}".format(ball.xaccel))       
-        if cury < 0:
-            ball.yaccel = ball.yaccel - 1
-            if ball.yaccel < min_accel:
-                ball.yaccel = min_accel
-        else:
-            ball.yaccel = ball.yaccel + 1
-            if ball.yaccel > max_accel:
-                ball.yaccel = max_accel
-
-        #new positions
-        ball.xpos = ball.xpos + ball.xaccel
-        ball.ypos = ball.ypos + ball.yaccel    
-    
         # Update the sprites based on the accelerometer
-        self.sprites['ball'].x = ball.xpos
-        self.sprites['ball'].y = ball.ypos
-
+        curposx = self.sprites['ball'].x
+        curposy = self.sprites['ball'].y
+        newposx = curposx + self.momentum['x']
+        newposy = curposy + self.momentum['y']
+        self.sprites['ball'].x = newposx
+        self.sprites['ball'].y = newposy
+        
         # Check for collision with the walls
         if (
-            ball.xpos < 0 
-            or ball.xpos > 240 
-            or ball.ypos < 0 
-            or ball.ypos > 240
+            self.sprites['ball'].x < 0 
+            or self.sprites['ball'].x > 240 
+            or self.sprites['ball'].y < 0 
+            or self.sprites['ball'].y > 240
             ):
-            ball.xpos = 120
-            ball.ypos = 120
-            ball.xaccel = 0
-            ball.yaccel = 0
+            self.sprites['ball'].x = 120
+            self.sprites['ball'].y = 120
+            self.momentum['x'] = 0
+            self.momentum['y'] = 0
         self.update()        
         time.sleep(sleep_time)
         
-        return ball
+        return counter
 
 hardware = wsRP2040128()
 counter = 0
-class Ball(object):
-    def __init__(self):
-        self.xpos = 120
-        self.ypos = 120
-        self.xaccel = 0
-        self.yaccel = 0
-        self.counter = 0
-        self.drawn = False
-ball = Ball()
 while True:
-    ## Uncomment the demo you want to run
-    #counter = hardware.demo(counter)
-    ball = hardware.ball_demo(ball, 0.05)
+    counter = hardware.ball_demo(counter)
+    time.sleep(0.1)    
+    pass
