@@ -342,10 +342,11 @@ class GC9A01_Display(object):
     # x: the x coordinate of the upper left corner of the bitmap
     # y: the y coordinate of the upper left corner of the bitmap
     # bitmap_path: the path to the bitmap file on the device
+    # transparent_color: the color to make transparent, default is None
     # groupname: the name of the group to add the bitmap to
     # returns: the displayio.TileGrid object that was created
-    def draw_bitmap(self,x,y,bitmap_path,groupname='default'):
-        return self.draw_sprite(x,y,bitmap_path,1,1,0,groupname)
+    def draw_bitmap(self,x,y,bitmap_path,transparent_color=None,groupname='default'):
+        return self.draw_sprite(x,y,bitmap_path,1,1,0,transparent_color,groupname)
     
     # Draw an animated sprite on the display
     # NOTE: proceed with caution as memory is low on this device
@@ -357,10 +358,13 @@ class GC9A01_Display(object):
     # sprite_tile_width: the width of each tile in the sprite
     # sprite_tile_height: the height of each tile in the sprite
     # sprite_starting_tile: the starting tile in the sprite
+    # transparent_color: the color to make transparent
     # groupname: the name of the group to add the sprite to
     # returns: the displayio.TileGrid object that was created
-    def draw_sprite(self,x,y,sprite_path,sprite_tiles_x,sprite_tiles_y,sprite_starting_tile,groupname='default'):
+    def draw_sprite(self,x,y,sprite_path,sprite_tiles_x,sprite_tiles_y,sprite_starting_tile,transparent_color = None, groupname='default'):
         bitmap = displayio.OnDiskBitmap(sprite_path)
+        if transparent_color != None:
+            bitmap.pixel_shader.make_transparent(transparent_color)
         sprite_tile_width = bitmap.width // sprite_tiles_x
         sprite_tile_height = bitmap.height // sprite_tiles_y
         tile_grid = displayio.TileGrid(bitmap, pixel_shader=bitmap.pixel_shader, width=1, height=1, tile_width=sprite_tile_width, tile_height=sprite_tile_height, default_tile=sprite_starting_tile, x=x, y=y)
@@ -371,14 +375,17 @@ class GC9A01_Display(object):
 
     # Fill the display with a color
     # color: a list of colors for the palette
+    # groupname: the name of the group to add the rectangle to
     # returns: the displayio.TileGrid object that was created
-    def fill(self,color):
-        return self.draw_rectangle(0,0,self.width,self.height,color)
+    def fill(self,color,groupname='default'):
+        return self.draw_rectangle(0,0,self.width,self.height,color,groupname)
 
     # Show the display
     # returns: nothing
     def show(self):
         for group in self.groups:
+            if not self.groups[group].hidden:
+                self.display.show(self.groups[group])
             self.display.show(self.groups[group])
             break
     
@@ -457,7 +464,14 @@ class wsRP2040128(object):
                 {'state': 'resting', 'time': time.monotonic()},
                 {'state': 'resting', 'time': time.monotonic()}
             ]
-            self.cur_tilt_command = 'none'
+            self.cur_tilt_command = {'command': 'none', 'time': time.monotonic()}
+            self.tilt_command_history = [
+                {'command': 'none', 'time': time.monotonic()},
+                {'command': 'none', 'time': time.monotonic()},
+                {'command': 'none', 'time': time.monotonic()}
+            ]
+            # And this is the flag for activating a "combination" aka LRL
+            self.combination = ''
 
         if(self._use_battery):
             self._battery = Battery()
@@ -525,11 +539,12 @@ class wsRP2040128(object):
     # x: the x coordinate of the upper left corner of the bitmap
     # y: the y coordinate of the upper left corner of the bitmap
     # bitmap_path: the path to the bitmap file on the device
+    # trans_color: the color to use for transparency
     # group: the index of the displayio.Group object to add
     #        the sprite to. Default is 'default'
     # returns: nothing
-    def draw_bitmap(self,sprite_id, x,y,bitmap_path,group='default'):
-        self.sprites[sprite_id] = self._display.draw_bitmap(x,y,bitmap_path,group)
+    def draw_bitmap(self,sprite_id, x,y,bitmap_path,trans_color=None,group='default'):
+        self.sprites[sprite_id] = self._display.draw_bitmap(x,y,bitmap_path,trans_color,group)
 
     # Passthrough method to draw an animated sprite on the display
     # sprite_id: text identifier for the sprite
@@ -539,17 +554,18 @@ class wsRP2040128(object):
     # sprite_tiles_x: the number of tiles in the sprite in the x direction
     # sprite_tiles_y: the number of tiles in the sprite in the y direction
     # sprite_starting_tile: the starting tile in the sprite
+    # trans_color: the color to use for transparency
     # group: the index of the displayio.Group object to add
     #        the sprite to. Default is 'default'
     # returns: nothing
-    def draw_sprite(self,sprite_id,x,y,sprite_path,sprite_tiles_x,sprite_tiles_y,sprite_starting_tile,group='default'):
-        self.sprites[sprite_id] = self._display.draw_sprite(x,y,sprite_path,sprite_tiles_x,sprite_tiles_y,sprite_starting_tile,group)
+    def draw_sprite(self,sprite_id,x,y,sprite_path,sprite_tiles_x,sprite_tiles_y,sprite_starting_tile,trans_color=None,group='default'):
+        self.sprites[sprite_id] = self._display.draw_sprite(x,y,sprite_path,sprite_tiles_x,sprite_tiles_y,sprite_starting_tile,trans_color,group)
 
     # Passthrough method to fill the display with a color
     # color: the color to fill the display with
     # returns: nothing
-    def fill(self,color):
-        self.sprites['background'] = self._display.fill(color)
+    def fill(self,color,group='default'):
+        self.sprites['background'] = self._display.fill(color,group)
 
     # Helper method to convert a color string to a color value
     # colstr: the color string
@@ -584,7 +600,9 @@ class wsRP2040128(object):
             'coral': 0xFF7F50,
             'salmon': 0xFA8072,
             'tan': 0xD2B48C,
-            'khaki': 0xF0E68C
+            'khaki': 0xF0E68C,
+            'plum': 0xDDA0DD,
+            'darkgreen': 0x006400
         }
         try:
             return [colors[colstr]]
@@ -626,9 +644,9 @@ class wsRP2040128(object):
     def fade(self,start,end,steps):
         start_rgb = self._color_to_rgb(start)
         end_rgb = self._color_to_rgb(end)
-        r_steps = self.steps(start_rgb[0],end_rgb[0],steps)
-        g_steps = self.steps(start_rgb[1],end_rgb[1],steps)
-        b_steps = self.steps(start_rgb[2],end_rgb[2],steps)
+        r_steps = self._steps(start_rgb[0],end_rgb[0],steps)
+        g_steps = self._steps(start_rgb[1],end_rgb[1],steps)
+        b_steps = self._steps(start_rgb[2],end_rgb[2],steps)
         return [self._rgb_to_color([r_steps[i],g_steps[i],b_steps[i]]) for i in range(steps)]
     
     # Show the display
@@ -646,8 +664,8 @@ class wsRP2040128(object):
         accel['x'] = xyz[1]
         accel['y'] = xyz[0]
         accel['z'] = xyz[2]
-        gyro['x'] = xyz[4]
-        gyro['y'] = xyz[3]
+        gyro['x'] = xyz[3]
+        gyro['y'] = xyz[4]
         gyro['z'] = xyz[5]       
 
         # Note: my device seems to have some calibration
@@ -728,21 +746,72 @@ class wsRP2040128(object):
                 self.tilt_history.pop(0)    
         
         # And finally we'll check for command status
+        cur_tilt_command = {'command':'none'}
+        # if the last 3 readings are the same, we'll assume
+        # that the user is holding the board in that position
         if self.tilt_history[0] == 'tilt left' and self.tilt_history[1] == 'tilt right':
-            self.cur_tilt_command = 'tilt left'
+            cur_tilt_command = {'command':'tilt left', 'time':time.monotonic()}
         elif self.tilt_history[0] == 'tilt right' and self.tilt_history[1] == 'tilt left':
-            self.cur_tilt_command = 'tilt right'
+            cur_tilt_command = {'command':'tilt right', 'time':time.monotonic()}
         elif self.tilt_history[0] == 'tilt up' and self.tilt_history[1] == 'tilt down':
-            self.cur_tilt_command = 'tilt up'
+            cur_tilt_command = {'command':'tilt up', 'time':time.monotonic()}
         elif self.tilt_history[0] == 'tilt down' and self.tilt_history[1] == 'tilt up':
-            self.cur_tilt_command = 'tilt down'
+            cur_tilt_command = {'command':'tilt down', 'time':time.monotonic()}
         elif self.tilt_history[0] == 'twist left' and self.tilt_history[1] == 'twist right':
-            self.cur_tilt_command = 'twist left'
+            cur_tilt_command = {'command':'twist left', 'time':time.monotonic()}
         elif self.tilt_history[0] == 'twist right' and self.tilt_history[1] == 'twist left':
-            self.cur_tilt_command = 'twist right'
+            cur_tilt_command = {'command':'twist right', 'time':time.monotonic()}
         else:
-            self.cur_tilt_command = 'resting'
+            # self.cur_tilt_command = 'resting'
+            pass
+        
+        if cur_tilt_command['command'] != 'none':
+            if cur_tilt_command['command'] != self.cur_tilt_command['command']:
+                self.cur_tilt_command = cur_tilt_command
+                self.tilt_command_history.append(cur_tilt_command)
+                if(len(self.tilt_command_history) > 3):
+                    self.tilt_command_history.pop(0)    
 
+        # Look for combinations that have occurred in the last 2 seconds
+        if (
+            self.tilt_command_history[0]['command'] == 'twist left' and
+            self.tilt_command_history[1]['command'] == 'twist right' and
+            self.tilt_command_history[2]['command'] == 'twist left' and
+            time.monotonic() - self.tilt_command_history[0]['time'] < 2
+        ):
+            self.combination = 'LRL'
+
+        if (
+            self.tilt_command_history[0]['command'] == 'twist right' and
+            self.tilt_command_history[1]['command'] == 'twist left' and
+            self.tilt_command_history[2]['command'] == 'twist right' and
+            time.monotonic() - self.tilt_command_history[0]['time'] < 2
+        ):
+            self.combination = 'RLR'
+
+        if (
+            self.tilt_command_history[0]['command'] == 'tilt up' and
+            self.tilt_command_history[1]['command'] == 'tilt down' and
+            self.tilt_command_history[2]['command'] == 'tilt up' and
+            time.monotonic() - self.tilt_command_history[0]['time'] < 2
+        ):
+            self.combination = 'UDU'
+        if (
+            self.tilt_command_history[0]['command'] == 'tilt up' and
+            self.tilt_command_history[1]['command'] == 'tilt down' and
+            self.tilt_command_history[2]['command'] == 'tilt up' and
+            time.monotonic() - self.tilt_command_history[0]['time'] < 2
+        ):
+            self.combination = 'DUD'
+
+        if self.combination != '':
+            print('combination: {}'.format(self.combination))
+            self.tilt_command_history = [
+                {'command':'none', 'time':time.monotonic()},
+                {'command':'none', 'time':time.monotonic()},
+                {'command':'none', 'time':time.monotonic()}
+            ]
+        
         self.accel = accel
         self.gyro = gyro
 
@@ -769,12 +838,68 @@ class wsRP2040128(object):
 
     # Demo code - run in the main loop, works if
     # you turn off hardware still.
-    # counter: the current animation iteration
     # sleep_time: the time to sleep between updates
     # returns: nothing
-    def demo(self, counter, sleep_time=0.1):
+    def demo(self, sleep_time=0.05):
         if(self._use_display):
-            try:
+            # Fill the background with black
+            self.draw_rectangle("demobg",0,0,240,240,self.color('black'))
+            # Draw the title bar
+            self.draw_rectangle("title",0,0,240,40,self.color('red'))
+            self.draw_text("title_text", 60, 25, "WS RP2040 1.28 Demo", self.color('white'), terminalio.FONT)
+            # Draw the status bar
+            if(self._use_battery):
+                self.draw_rectangle("battery",0,40,240,30,self.color('blue'))
+                self.draw_text("charge_text", 20, 55, "Chg: {}".format(self.battery_status), self.color('white'), terminalio.FONT)
+                self.draw_text("volt_text", 90, 55, "Vol: {:.2f}v".format(self.battery_voltage), self.color('white'), terminalio.FONT)
+            if(self._use_accel):
+                self.draw_text("rev_text", 160, 55, "ARev: {}".format(self.qmi8658rev), self.color('white'), terminalio.FONT)
+            # Draw all accel data
+            if(self._use_accel):
+                # Draw the accelerometer data
+                self.draw_rectangle("accelerometer",0,70,60,60,self.color('green'))
+                self.draw_text("accelerometer_text", 20, 85, "Accel", self.color('black'), terminalio.FONT)
+                self.draw_text("accel_x", 20, 95, "X: 0", self.color('black'), terminalio.FONT)
+                self.draw_text("accel_y", 20, 105, "Y: 0", self.color('black'), terminalio.FONT)
+                self.draw_text("accel_z", 20, 115, "Z: 0", self.color('black'), terminalio.FONT)
+                # Draw the gyroscope data
+                self.draw_rectangle("gyroscope",60,70,60,60,self.color('orange'))
+                self.draw_text("gyroscope_text", 80, 85, "Gyro", self.color('black'), terminalio.FONT)
+                self.draw_text("gyro_x", 80, 95, "X: 0", self.color('black'), terminalio.FONT)
+                self.draw_text("gyro_y", 80, 105, "Y: 0", self.color('black'), terminalio.FONT)
+                self.draw_text("gyro_z", 80, 115, "Z: 0", self.color('black'), terminalio.FONT)
+                # Draw the Tilt data
+                self.draw_rectangle("momentum",120,70,60,60,self.color('magenta'))
+                self.draw_text("momentum_text", 140, 85, "Tilt", self.color('black'), terminalio.FONT)
+                self.draw_text("mom_x", 140, 95, "X: 0", self.color('black'), terminalio.FONT)
+                self.draw_text("mom_y", 140, 105, "Y: 0", self.color('black'), terminalio.FONT)
+                self.draw_text("mom_z", 140, 115, "Z: 0", self.color('black'), terminalio.FONT)
+                # Draw current tilt status and command
+                self.draw_rectangle("tilt_status",180,70,60,60,self.color('cyan'))
+                self.draw_text("tilt_status_text", 200, 85, "Stat", self.color('black'), terminalio.FONT)
+                self.draw_text("tilt_status", 200, 95, "resting", self.color('black'), terminalio.FONT)
+                self.draw_text("tilt_command", 200, 105, "resting", self.color('black'), terminalio.FONT)
+            # Draw a cicle
+            self.draw_circle("circle", 40, 170, 20, self.color('yellow'))
+            # Draw a polygon
+            points = [
+                (15,0),
+                (11,10),
+                (0,10),
+                (8,20),
+                (5,29),
+                (15,21),
+                (25,29),
+                (22,20),
+                (29,10),
+                (19,10)
+            ]
+            self.draw_polygon("polygon", points, 160, 160, self.color('brown'))
+        else:
+            print("Display not intialized")
+
+        while True:
+            if(self._use_display):
                 # Update the sensor info
                 if(self._use_battery):
                     self.sprites['volt_text'].text = "Vol: {:.2f}v".format(self.battery_voltage)
@@ -790,135 +915,270 @@ class wsRP2040128(object):
                     self.sprites['mom_y'].text = "Y: {}".format(self.momentum['y'])
                     self.sprites['mom_z'].text = "Z: {}".format(self.momentum['z'])
                     self.sprites['tilt_status'].text = "{}".format(self.tilt_state)
-                    self.sprites['tilt_command'].text = "{}".format(self.cur_tilt_command)
+                    self.sprites['tilt_command'].text = "{}".format(self.cur_tilt_command['command'])
 
                 # Title Animation
                 if(self.sprites['title_text'].x < -100):
                     self.sprites['title_text'].x = 200
-                elif counter%2==0:
+                else:
                     self.sprites['title_text'].x -= 1
-
 
                 # Update sprite, spritecounter and display    
                 if(self.time + sleep_time) < time.monotonic():
                     self.update()
-                    counter += 1
                     self.time = time.monotonic()
-                    if counter >= 14:
-                        counter = 0           
 
-            except Exception as e:
-                print("We got an exception: {}".format(e))
-                print("Usually this just means that we haven't initialized the display elements yet.")
-                # Fill the background with black
-                self.fill(self.color('black'))
-                # Draw the title bar
-                self.draw_rectangle("title",0,0,240,40,self.color('red'))
-                self.draw_text("title_text", 60, 25, "WS RP2040 1.28 Demo", self.color('white'), terminalio.FONT)
-                # Draw the status bar
-                if(self._use_battery):
-                    self.draw_rectangle("battery",0,40,240,30,self.color('blue'))
-                    self.draw_text("charge_text", 20, 55, "Chg: {}".format(self.battery_status), self.color('white'), terminalio.FONT)
-                    self.draw_text("volt_text", 90, 55, "Vol: {:.2f}v".format(self.battery_voltage), self.color('white'), terminalio.FONT)
-                if(self._use_accel):
-                    self.draw_text("rev_text", 160, 55, "ARev: {}".format(self.qmi8658rev), self.color('white'), terminalio.FONT)
-                # Draw all accel data
-                if(self._use_accel):
-                    # Draw the accelerometer data
-                    self.draw_rectangle("accelerometer",0,70,60,60,self.color('green'))
-                    self.draw_text("accelerometer_text", 20, 85, "Accel", self.color('black'), terminalio.FONT)
-                    self.draw_text("accel_x", 20, 95, "X: 0", self.color('black'), terminalio.FONT)
-                    self.draw_text("accel_y", 20, 105, "Y: 0", self.color('black'), terminalio.FONT)
-                    self.draw_text("accel_z", 20, 115, "Z: 0", self.color('black'), terminalio.FONT)
-                    # Draw the gyroscope data
-                    self.draw_rectangle("gyroscope",60,70,60,60,self.color('orange'))
-                    self.draw_text("gyroscope_text", 80, 85, "Gyro", self.color('black'), terminalio.FONT)
-                    self.draw_text("gyro_x", 80, 95, "X: 0", self.color('black'), terminalio.FONT)
-                    self.draw_text("gyro_y", 80, 105, "Y: 0", self.color('black'), terminalio.FONT)
-                    self.draw_text("gyro_z", 80, 115, "Z: 0", self.color('black'), terminalio.FONT)
-                    # Draw the Tilt data
-                    self.draw_rectangle("momentum",120,70,60,60,self.color('magenta'))
-                    self.draw_text("momentum_text", 140, 85, "Tilt", self.color('black'), terminalio.FONT)
-                    self.draw_text("mom_x", 140, 95, "X: 0", self.color('black'), terminalio.FONT)
-                    self.draw_text("mom_y", 140, 105, "Y: 0", self.color('black'), terminalio.FONT)
-                    self.draw_text("mom_z", 140, 115, "Z: 0", self.color('black'), terminalio.FONT)
-                    # Draw current tilt status and command
-                    self.draw_rectangle("tilt_status",180,70,60,60,self.color('cyan'))
-                    self.draw_text("tilt_status_text", 200, 85, "Stat", self.color('black'), terminalio.FONT)
-                    self.draw_text("tilt_status", 200, 95, "resting", self.color('black'), terminalio.FONT)
-                    self.draw_text("tilt_command", 200, 105, "resting", self.color('black'), terminalio.FONT)
-                # Draw a cicle
-                self.draw_circle("circle", 40, 170, 20, self.color('yellow'))
-                # Draw a polygon
-                points = [
-                    (15,0),
-                    (11,10),
-                    (0,10),
-                    (8,20),
-                    (5,29),
-                    (15,21),
-                    (25,29),
-                    (22,20),
-                    (29,10),
-                    (19,10)
+            # Break    
+            if(self.combination == 'LRL'):
+                self.combination = ''
+                sprites = [
+                    'demobg',
+                    'title',
+                    'title_text',
+                    'circle',
+                    'polygon'
                 ]
-                self.draw_polygon("polygon", points, 160, 160, self.color('brown'))
-        else:
-            print("Display not intialized")
-        return counter
-
+                if(self._use_battery):
+                    sprites.append('battery')
+                    sprites.append('volt_text')
+                    sprites.append('charge_text')
+                if(self._use_accel):
+                    sprites.append('accelerometer')
+                    sprites.append('accelerometer_text')
+                    sprites.append('rev_text')
+                    sprites.append('accel_x')
+                    sprites.append('accel_y')
+                    sprites.append('accel_z')
+                    sprites.append('gyroscope')
+                    sprites.append('gyroscope_text')
+                    sprites.append('gyro_x')
+                    sprites.append('gyro_y')
+                    sprites.append('gyro_z')
+                    sprites.append('momentum')
+                    sprites.append('momentum_text')
+                    sprites.append('mom_x')
+                    sprites.append('mom_y')
+                    sprites.append('mom_z')
+                    sprites.append('tilt_status')
+                    sprites.append('tilt_status_text')
+                    sprites.append('tilt_command')
+                
+                for sprite in sprites:
+                    self._display.groups['default'].remove(self.sprites[sprite])
+                break    
+            pass
+    
     # Demo using drawing and accelerator.  We're creating
     # a ball that reads the accelerometer and moves around
-    # the screen.  When it falls off the circular screen,
+    # the screen.  When it falls off the table,
     # the game is over and the ball is reset to the center.
-    # counter: the current animation iteration
     # sleep_time: the time to sleep between updates
     # returns: nothing
-    def ball_demo(self, counter, sleep_time=0.01):
-        max_accel = 5
-        # Check if the ball is drawn
-        if(counter == 0):
-            # Initializations
-            print("{}: Initializing ball_demo".format(counter))
-            self.fill(self.color('black'))
-            self.draw_circle("ball", 120, 120, 10, self.color('white'))
+    def ball_demo(self, sleep_time=0.05):
+        # Initializations
+        self.combination = ''
+        self.draw_rectangle("ballbg", 0,0,240,240,self.color('blue'))
+        self.draw_rectangle("table", 35,35,170,170,self.color('orange'))
+        self.draw_circle("ball", 120, 120, 10, self.color('purple'))
         
-        # Avoid overflow    
-        if counter == 1024:
-            counter = 1
-        else:
-            counter = counter + 1
-
+        while True:
+            # Main game loop
+            # Update the sprites based on the accelerometer
+            curposx = self.sprites['ball'].x
+            curposy = self.sprites['ball'].y
+            newposx = curposx + self.momentum['x']
+            newposy = curposy + self.momentum['y']
+            self.sprites['ball'].x = newposx
+            self.sprites['ball'].y = newposy
             
+            # Check for collision with the walls
+            if (
+                self.sprites['ball'].x < 22 
+                or self.sprites['ball'].x > 215 
+                or self.sprites['ball'].y < 22 
+                or self.sprites['ball'].y > 215
+                ):
+                self.sprites['ball'].x = 120
+                self.sprites['ball'].y = 120
+                self.momentum['x'] = 0
+                self.momentum['y'] = 0
 
-        # Main game loop
-        # Update the sprites based on the accelerometer
-        curposx = self.sprites['ball'].x
-        curposy = self.sprites['ball'].y
-        newposx = curposx + self.momentum['x']
-        newposy = curposy + self.momentum['y']
-        self.sprites['ball'].x = newposx
-        self.sprites['ball'].y = newposy
+            self.update() 
+
+            if(self.combination == 'LRL'):
+                self.combination = ''
+                self._display.groups['default'].remove(self.sprites['ballbg'])
+                self._display.groups['default'].remove(self.sprites['table'])
+                self._display.groups['default'].remove(self.sprites['ball'])
+                break
         
-        # Check for collision with the walls
-        if (
-            self.sprites['ball'].x < 0 
-            or self.sprites['ball'].x > 240 
-            or self.sprites['ball'].y < 0 
-            or self.sprites['ball'].y > 240
-            ):
-            self.sprites['ball'].x = 120
-            self.sprites['ball'].y = 120
-            self.momentum['x'] = 0
-            self.momentum['y'] = 0
-        self.update()        
-        time.sleep(sleep_time)
+            time.sleep(sleep_time)
+
+     # Demo using drawing and accelerator.  We're creating
+    
+    # This is the banner screen.  Very simple, just a banner
+    # that scrolls across the screen.
+    # banner_text: the text to display in the banner
+    # sleep_time: the time to sleep between updates
+    # returns: nothing
+    def banner_demo(self, banner_text, sleep_time=0.05):
+        self.combination = ''
+        self.draw_rectangle("bannerbg", 0,0,240,240,self.color('black'))
         
-        return counter
+        # We are going to draw the badge rim by making a series of concentric circles
+        # starting with the outermost circle and working our way in.  We'll use the 
+        # fade method to give the circles a 3d effect.
+        cfarr = self.fade(self.color('orange'), self.color('white'), 9)
+        colorfade = cfarr + cfarr[::-1] + [self.color('black')]
+        for i in range(0, len(colorfade)):
+            self.draw_circle("rim_{}".format(i), 120, 120, 120-i, colorfade[i])
+
+        self.draw_text("banner_text", 0, 100, banner_text, self.color('magenta'), bitmap_font.load_font("font/mfbold.bdf"))
+        
+        while True:
+            # Main game loop
+            # Update the sprites based on the accelerometer
+            curposx = self.sprites['banner_text'].x
+            newposx = curposx - 1
+            self.sprites['banner_text'].x = newposx
+            # Check for collision with the walls
+            if (self.sprites['banner_text'].x < (0 - self.sprites['banner_text'].width)):
+                self.sprites['banner_text'].x = 240
+            
+            self.update() 
+
+            if(self.combination == 'LRL'):
+                self.combination = ''
+                self._display.groups['default'].remove(self.sprites['bannerbg'])
+                self._display.groups['default'].remove(self.sprites['banner_text'])
+                for i in range(0, len(colorfade)):
+                    self._display.groups['default'].remove(self.sprites['rim_{}'.format(i)])
+                break
+        
+            time.sleep(sleep_time)
+
+    # a ball that reads the accelerometer and moves around
+    # the screen.  When it falls off the table,
+    # the game is over and the ball is reset to the center.
+    # sleep_time: the time to sleep between updates
+    # returns: nothing
+    def old_menu(self, sleep_time=0.05):
+        # Initializations
+        self.fill(self.color('black'))
+        self.draw_text("prompt_text", 70, 100, "Tilt to choose:", self.color('white'), terminalio.FONT)
+        self.draw_text("bottom_choice_text", 100, 220, "Banner", self.color('white'), terminalio.FONT)
+        self.draw_text("top_choice_text", 90, 10, "Settings", self.color('white'), terminalio.FONT)
+        self.draw_text("left_choice_text", 10, 100, "Games", self.color('white'), terminalio.FONT)
+        self.draw_text("right_choice_text", 220, 100, "Off", self.color('white'), terminalio.FONT)
+        self.draw_circle("cursor", 120, 120, 5, self.color('white'))
+        
+        while True:
+            # Main game loop
+            # Update the sprites based on the accelerometer
+            curposx = self.sprites['cursor'].x
+            curposy = self.sprites['cursor'].y
+            newposx = curposx + self.momentum['x']
+            newposy = curposy + self.momentum['y']
+            self.sprites['cursor'].x = newposx
+            self.sprites['cursor'].y = newposy
+            
+            # Reset ball position
+            def reset_cursor():
+                self.sprites['cursor'].x = 120
+                self.sprites['cursor'].y = 120
+                self.momentum['x'] = 0
+                self.momentum['y'] = 0
+            
+            def remove_sprites():
+                self._display.groups['default'].remove(self.sprites['prompt_text'])
+                self._display.groups['default'].remove(self.sprites['bottom_choice_text'])
+                self._display.groups['default'].remove(self.sprites['top_choice_text'])
+                self._display.groups['default'].remove(self.sprites['left_choice_text'])
+                self._display.groups['default'].remove(self.sprites['right_choice_text'])
+                self._display.groups['default'].remove(self.sprites['cursor'])
+                
+            def add_sprites():
+                reset_cursor()
+                self._display.groups['default'].append(self.sprites['prompt_text'])
+                self._display.groups['default'].append(self.sprites['bottom_choice_text'])
+                self._display.groups['default'].append(self.sprites['top_choice_text'])
+                self._display.groups['default'].append(self.sprites['left_choice_text'])
+                self._display.groups['default'].append(self.sprites['right_choice_text'])
+                self._display.groups['default'].append(self.sprites['cursor'])
+
+            # Check for collision with the walls
+            if (self.sprites['cursor'].x < 22):
+                # left option
+                remove_sprites()
+                self.ball_demo()
+                add_sprites()
+            elif (self.sprites['cursor'].x > 215):
+                # right option
+                remove_sprites()
+                self.ball_demo()
+                add_sprites()
+            elif(self.sprites['cursor'].y < 22):
+                remove_sprites()
+                self.demo()
+                add_sprites()  
+            elif(self.sprites['cursor'].y > 215):
+                remove_sprites()
+                self.banner_demo('Easily Amused')
+                add_sprites()
+            self.update()        
+            time.sleep(sleep_time)
+
+
+    # New menu.  User is presented with options to choose from.  
+    # User can select which option to choose by tilting the board
+    # backwards and forwards.  If the user does not make a selection
+    # within 20 seconds, the menu will automatically select the banner
+    # option.
+    # sleep_time: the time to sleep between updates
+    # returns: nothing
+    def main_menu(self, sleep_time=0.05):
+        self.fill(self.color('black'))
+        self.draw_text("prompt_text", 40, 80, "Please choose an option:", self.color('white'), terminalio.FONT)
+        choices = ['Banner', 'Settings', 'Games', 'Off']
+        selection = 0
+        for i in range(0, len(choices)):
+            self.draw_text("choice_{}".format(i), 100, 100 + (i * 20), choices[i], self.color('white'), terminalio.FONT)
+
+        self.draw_text("selector", 90, 100, "*", self.color('white'), terminalio.FONT)
+
+        def select(selection, choices):
+            if selection >= len(choices):
+                    selection = 0
+            elif selection < 0:
+                    selection = len(choices) - 1
+
+            self.sprites['selector'].y = 100 + (selection * 20)
+            return selection
+
+        while True:
+            com = self.combination
+            if(com != ''):
+                self.combination = ''
+            if(com == 'UDU'):
+               selection -= 1
+               selection = select(selection, choices)     
+            elif(com == 'DUD'):
+               selection += 1
+               selection = select(selection, choices)
+            elif(com == 'RLR'):
+                if selection == 0:
+                    self.banner_demo('Easily Amused')
+                elif selection == 1:
+                    self.demo()
+                elif selection == 2:
+                    self.ball_demo()
+                elif selection == 3:
+                    self.demo()
+            self.update()                    
+            pass
+        
+
+
 
 hardware = wsRP2040128()
-counter = 0
-while True:
-    counter = hardware.ball_demo(counter)
-    time.sleep(0.1)    
-    pass
+hardware.main_menu()
