@@ -18,6 +18,7 @@ import displayio
 import gc9a01
 import terminalio
 import analogio
+import digitalio
 import vectorio
 
 from adafruit_display_text import label
@@ -258,6 +259,16 @@ class GC9A01_Display(object):
         self.groups = {
             'default': displayio.Group()
         }
+
+    # Turn off the backlight
+    # returns: nothing
+    def off(self):
+        self.display.brightness = 0
+
+    # Turn on the backlight
+    # returns: nothing
+    def on(self):
+        self.display.brightness = 1
 
     # Add a new group to the display
     # groupname: the name of the group to add
@@ -1128,7 +1139,18 @@ class wsRP2040128(object):
             self.update()        
             time.sleep(sleep_time)
 
-
+    # Turn off the backlight to save power
+    def off(self, sleep_time=0.05):
+        # Initializations
+        self.combination = ''
+        self._display.off()
+        while True:
+            if(self.combination == 'LRL'):
+                self._display.on()
+                self.combination = ''
+                break
+        
+            time.sleep(sleep_time)
     # New menu.  User is presented with options to choose from.  
     # User can select which option to choose by tilting the board
     # backwards and forwards.  If the user does not make a selection
@@ -1137,6 +1159,7 @@ class wsRP2040128(object):
     # sleep_time: the time to sleep between updates
     # returns: nothing
     def main_menu(self, sleep_time=0.05):
+        self.combination = ''
         self.fill(self.color('black'))
         self.draw_text("prompt_text", 40, 80, "Please choose an option:", self.color('white'), terminalio.FONT)
         choices = ['Banner', 'Settings', 'Games', 'Off']
